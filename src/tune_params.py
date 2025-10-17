@@ -1,16 +1,15 @@
 """
 tune_params.py
 --------------------------
-Script for hyperparameter tuning of the PLM regressor using Optuna
-for efficient, intelligent search.
-
-This script uses Optuna to explore a defined hyperparameter space. For each
-trial, Optuna suggests a set of parameters, and the script evaluates them
-using K-Fold Cross-Validation. The final output identifies the best-performing
-configuration found during the search.
+Unified script for hyperparameter tuning of PLM models for classification and
+regression tasks using Optuna.
 
 Typical usage:
-    python tune_params.py --n_trials 50 --n_splits 5
+    # Tune a classifier
+    python tune_params.py --task_type classification --n_trials 50
+
+    # Tune a regressor
+    python tune_params.py --task_type regression --n_trials 50
 """
 
 # ============================
@@ -18,7 +17,6 @@ Typical usage:
 # ============================
 import os
 import sys
-import math
 import argparse
 import logging
 from datetime import datetime
@@ -31,29 +29,34 @@ from torch.utils.data import DataLoader, SubsetRandomSampler
 from torch.optim import AdamW
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from sklearn.model_selection import StratifiedKFold
+from sklearn.utils.class_weight import compute_class_weight
 import optuna
 
 # Local imports
 sys.path.insert(0, 'src')
-from model import PLMRegressor
+from model import PLMClassifier, PLMRegressor
 from dataset import HIVSeqDataset
 import utils as ut
-from engine import train_epoch, evaluate
+from engine import Trainer
 
-# ============ DEFAULTS ============
+# ============================
+# Defaults
+# ============================
 MODEL_NAME = "facebook/esm2_t33_650M_UR50D"
-LABEL_NAME = "pIC80"
+CLF_LABEL_NAME = "Label"
+REG_LABEL_NAME = "pIC80"
 INPUT_CSV = "data/input.csv"
 RESULTS_DIR = "results/tuning_optuna"
 LOG_DIR = "logs"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# =================================
+# ============================
 
-def setup_logging(log_dir):
-    # ... (This function remains the same)
+def setup_logging(log_dir, task_type):
+    # ... (remains the same)
     os.makedirs(log_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"optuna_tuning_run_{timestamp}.log")
+    log_file = os.path.join(log_dir, f"optuna_{task_type}_{timestamp}.log")
+    # ... (rest of function is the same)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     file_handler = logging.FileHandler(log_file)
@@ -67,10 +70,20 @@ def setup_logging(log_dir):
     return logger
 
 def parse_args():
-    # ... (This function remains the same)
-    parser = argparse.ArgumentParser(description="Hyperparameter tuning for a PLM Regressor with Optuna.")
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Hyperparameter tuning for PLM models with Optuna.")
+    
+    # --- Task Configuration ---
+    parser.add_argument("--task_type", type=str, required=True,
+                        choices=["classification", "regression"],
+                        help="The type of task to perform.")
+    parser.add_argument("--num_classes", type=int, default=2, help="Number of classes (for classification).")
+    
+    # --- Optuna/CV Configuration ---
     parser.add_argument("--n_trials", type=int, default=50, help="Number of tuning trials for Optuna to run.")
     parser.add_argument("--n_splits", type=int, default=5, help="Number of folds for cross-validation.")
+    
+    # ... (other arguments remain the same)
     parser.add_argument("--epochs", type=int, default=1000, help="Maximum epochs per fold.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--patience", type=int, default=10, help="Patience for early stopping.")
@@ -80,31 +93,33 @@ def parse_args():
     return parser.parse_args()
 
 
-# ==========================================================
-# 1. DEFINE THE OBJECTIVE FUNCTION FOR OPTUNA
-# ==========================================================
-def objective(trial: optuna.Trial, args, full_dataset, class_labels, tokenizer, g) -> float:
+def objective(trial: optuna.Trial, args, full_dataset, stratify_labels, tokenizer, g) -> float:
     """
-    This function defines one trial for Optuna. It will:
-    1. Suggest a set of hyperparameters for the PLMRegressor.
-    2. Run a full K-Fold Cross-Validation with these parameters.
-    3. Return the average validation MSE, which Optuna will try to minimize.
+    Defines one Optuna trial, which runs a full K-Fold CV for a given set of hyperparameters.
     """
     # --- 1a. Suggest Hyperparameters ---
     params = {
-        'lr': trial.suggest_float('lr', 1e-6, 1e-4, log=True),
-        'unfreeze_layers': trial.suggest_int('unfreeze_layers', 5, 20),
+        'lr': trial.suggest_float('lr', 1e-6, 1e-3, log=True),
+        'unfreeze_layers': trial.suggest_int('unfreeze_layers', 5, 25),
         'batch_size': trial.suggest_categorical('batch_size', [4, 6, 8]),
         'dropout': trial.suggest_float('dropout', 0.1, 0.5),
-        'num_heads': trial.suggest_categorical('num_heads', [1, 2, 4, 8]),
     }
+
+    # Add task-specific hyperparameters
+    if args.task_type == "classification":
+        params['head_hidden_dim'] = trial.suggest_categorical('head_hidden_dim', [0, 64, 128, 256, 512]) # 0 for linear head
+        params['criterion'] = trial.suggest_categorical('criterion', ['CrossEntropy', 'WeightedCrossEntropy'])
+    else: # regression
+        params['criterion'] = trial.suggest_categorical('criterion', ['MSE', 'Huber'])
+
     logging.info(f"\n--- Starting Trial {trial.number} with params: {params} ---")
 
     # --- 1b. Run K-Fold Cross-Validation ---
     kfold = StratifiedKFold(n_splits=args.n_splits, shuffle=True, random_state=args.seed)
-    fold_results = []
+    fold_losses = []
+    stratify_labels_np = np.array(stratify_labels)
 
-    for fold, (train_ids, val_ids) in enumerate(kfold.split(full_dataset, class_labels)):
+    for fold, (train_ids, val_ids) in enumerate(kfold.split(full_dataset, stratify_labels_np)):
         logging.info(f"--- Fold {fold + 1}/{args.n_splits} ---")
 
         train_sampler = SubsetRandomSampler(train_ids)
@@ -112,97 +127,106 @@ def objective(trial: optuna.Trial, args, full_dataset, class_labels, tokenizer, 
         train_loader = DataLoader(full_dataset, batch_size=params['batch_size'], sampler=train_sampler, generator=g)
         val_loader = DataLoader(full_dataset, batch_size=params['batch_size'], sampler=val_sampler)
 
-        model = PLMRegressor(
-            model_name=MODEL_NAME,
-            num_heads=params['num_heads'],
-            dropout=params['dropout']
-        )
+        # --- Dynamically create model and criterion ---
+        if args.task_type == "classification":
+            model = PLMClassifier(model_name=MODEL_NAME, num_classes=args.num_classes,
+                                  head_hidden_dim=params['head_hidden_dim'], dropout=params['dropout'])
+            if params['criterion'] == 'WeightedCrossEntropy':
+                train_labels = stratify_labels_np[train_ids]
+                weights = compute_class_weight('balanced', classes=np.unique(train_labels), y=train_labels)
+                criterion = nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float).to(DEVICE))
+            else:
+                criterion = nn.CrossEntropyLoss()
+        else: # regression
+            model = PLMRegressor(model_name=MODEL_NAME, dropout=params['dropout'])
+            if params['criterion'] == 'Huber':
+                criterion = nn.HuberLoss()
+            else:
+                criterion = nn.MSELoss()
+        
         model = ut.freeze_all_but_last_n(model, params['unfreeze_layers'])
         model.to(DEVICE)
-
+        
         optimizer = AdamW([p for p in model.parameters() if p.requires_grad], lr=params['lr'])
         scheduler = get_linear_schedule_with_warmup(optimizer, 0, len(train_loader) * args.epochs)
-        criterion = nn.MSELoss()
 
-        best_val_mse = np.inf
-        patience_counter = 0
-        for epoch in range(args.epochs):
-            # The training and evaluation engine is model-agnostic and remains the same
-            train_loss = train_epoch(model, train_loader, optimizer, scheduler, criterion, DEVICE, 1, 0.0, tokenizer)
-            val_mse, _ = evaluate(model, val_loader, DEVICE)
-            
-            if val_mse < best_val_mse:
-                best_val_mse = val_mse
-                patience_counter = 0
-            else:
-                patience_counter += 1
-            if patience_counter >= args.patience:
-                logging.info(f"Early stopping in Fold {fold+1} at Epoch {epoch+1}")
-                break
+        # --- Instantiate and run the Trainer ---
+        trainer = Trainer(model=model, optimizer=optimizer, criterion=criterion, device=DEVICE,
+                          task_type=args.task_type, scheduler=scheduler, patience=args.patience)
+        result = trainer.fit(train_loader=train_loader, val_loader=val_loader,
+                             epochs=args.epochs, tokenizer=tokenizer)
         
-        fold_results.append(best_val_mse)
+        # Optuna will minimize the best validation loss found in this fold
+        if result['best_model_state']:
+            fold_losses.append(result['best_metrics']['loss'])
+        else: # Handle case where training fails or makes no progress
+            fold_losses.append(np.inf)
 
     # --- 1c. Return the final metric for Optuna to optimize ---
-    mean_mse_for_trial = np.mean(fold_results)
-    logging.info(f"--- Trial {trial.number} finished. Mean Val MSE: {mean_mse_for_trial:.4f} ---")
+    mean_val_loss = np.mean(fold_losses)
+    logging.info(f"--- Trial {trial.number} finished. Mean Val Loss: {mean_val_loss:.4f} ---")
     
-    return mean_mse_for_trial
+    return mean_val_loss
 
 
 def main():
     """Main execution routine for hyperparameter tuning with Optuna."""
     args = parse_args()
-    logger = setup_logging(args.log_dir)
+    logger = setup_logging(args.log_dir, args.task_type)
 
     logger.info("=================================================")
-    logger.info("  Starting PLM Regressor Hyperparameter Tuning   ")
+    logger.info(f" Starting PLM {args.task_type.capitalize()} Hyperparameter Tuning ")
     logger.info("=================================================")
     
-    # ... (The rest of the main function remains the same) ...
+    # --- Setup ---
     os.makedirs(args.results_dir, exist_ok=True)
     g = ut.set_seed(args.seed)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
-    logger.info(f"Loading full dataset from {args.input_csv}...")
+    # --- Load Data ---
     df = pd.read_csv(args.input_csv)
     sequences = df["Sequence"].astype(str).tolist()
-    labels = df[LABEL_NAME].astype(float).tolist()
-    class_labels = df["Label"].astype(int).tolist()
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    
+    if args.task_type == "regression":
+        labels = df[REG_LABEL_NAME].astype(float).tolist()
+    else: # classification
+        labels = df[CLF_LABEL_NAME].astype(int).tolist()
+    
+    # Stratification is always done on the binned classification labels
+    stratify_labels = df[CLF_LABEL_NAME].astype(int).tolist()
     full_dataset = HIVSeqDataset(sequences, labels, tokenizer, max_len=512)
 
-    storage_path = os.path.join(args.results_dir, "optuna_study.db")
+    # --- Optuna Study ---
+    storage_path = os.path.join(args.results_dir, f"optuna_study_{args.task_type}.db")
     storage_name = f"sqlite:///{storage_path}"
-    study_name = "plm-regressor-tuning-study"
-
-    logger.info(f"Using shared storage: {storage_name}")
-    logger.info(f"Joining study: {study_name}")
+    study_name = f"plm-{args.task_type}-tuning-study"
 
     study = optuna.create_study(
-        direction="minimize",
+        direction="minimize", # We always minimize validation loss
         storage=storage_name,
         study_name=study_name,
         load_if_exists=True
     )
     
     study.optimize(
-        lambda trial: objective(trial, args, full_dataset, class_labels, tokenizer, g),
+        lambda trial: objective(trial, args, full_dataset, stratify_labels, tokenizer, g),
         n_trials=args.n_trials
     )
 
+    # --- Report Best Results ---
     best_trial = study.best_trial
-    
     logger.info("=" * 60)
     logger.info("          Hyperparameter Tuning Complete          ")
     logger.info("=" * 60)
-    logger.info(f"Number of finished trials in DB: {len(study.trials)}")
-    logger.info("Best trial found across all workers:")
-    logger.info(f"  Value (Mean Val MSE): {best_trial.value:.4f}")
+    logger.info("Best trial found:")
+    logger.info(f"  Value (Mean Val Loss): {best_trial.value:.4f}")
     logger.info("  Params: ")
     for key, value in best_trial.params.items():
         logger.info(f"    {key}: {value}")
 
+    # Save summary
     results_df = study.trials_dataframe()
-    summary_path = os.path.join(args.results_dir, "optuna_tuning_summary.csv")
+    summary_path = os.path.join(args.results_dir, f"optuna_summary_{args.task_type}.csv")
     results_df.to_csv(summary_path, index=False)
     logger.info(f"Full tuning summary saved to {summary_path}")
 
