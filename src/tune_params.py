@@ -19,7 +19,6 @@ import os
 import sys
 import argparse
 import logging
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -50,24 +49,6 @@ RESULTS_DIR = "results/tuning_optuna"
 LOG_DIR = "logs"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ============================
-
-def setup_logging(log_dir, task_type):
-    # ... (remains the same)
-    os.makedirs(log_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"optuna_{task_type}_{timestamp}.log")
-    # ... (rest of function is the same)
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    file_handler = logging.FileHandler(log_file)
-    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_formatter = logging.Formatter('%(message)s')
-    stream_handler.setFormatter(stream_formatter)
-    logger.addHandler(stream_handler)
-    return logger
 
 def parse_args():
     """Parse command-line arguments."""
@@ -172,7 +153,7 @@ def objective(trial: optuna.Trial, args, full_dataset, stratify_labels, tokenize
 def main():
     """Main execution routine for hyperparameter tuning with Optuna."""
     args = parse_args()
-    logger = setup_logging(args.log_dir, args.task_type)
+    logger = ut.setup_logging(args.log_dir, args.task_type)
 
     logger.info("=================================================")
     logger.info(f" Starting PLM {args.task_type.capitalize()} Hyperparameter Tuning ")

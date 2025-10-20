@@ -8,7 +8,7 @@ function for making predictions on single sequences.
 """
 
 import sys
-from typing import Tuple, Union, Dict, Literal, Optional
+from typing import List, Optional, Tuple, Union, Dict, Set, Literal
 import numpy as np
 import torch
 from torch import nn, amp
@@ -309,7 +309,7 @@ class Predictor:
         
         elif isinstance(self.model, PLMClassifier):
             # Convert the tensor of logits to a list of probability dictionaries
-            probabilities = F.softmax(outputs, dim=1).cpu().numpy()
+            probabilities = torch.softmax(outputs, dim=1).cpu().numpy()
             predictions = [
                 {f"Class_{i}": prob for i, prob in enumerate(p_row)}
                 for p_row in probabilities

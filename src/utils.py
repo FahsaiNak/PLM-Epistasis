@@ -4,14 +4,36 @@ utils.py
 Helper utilities for reproducibility, masking, and model analysis.
 """
 
+import sys
 import random
-from typing import List, Optional, Tuple, Union, Set
+import os
+import logging
+from datetime import datetime
+from typing import List, Optional, Tuple, Union, Dict, Set, Literal
 import numpy as np
 import torch
 import torch.nn as nn
 from transformers import PreTrainedModel, AutoTokenizer
 from sklearn.metrics import f1_score, roc_auc_score, accuracy_score, mean_squared_error
 from scipy.stats import pearsonr
+from captum.attr import IntegratedGradients, NoiseTunnel, InputXGradient
+
+def setup_logging(log_dir, task_type):
+    # ... (This function remains the same)
+    os.makedirs(log_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(log_dir, f"{task_type}_{timestamp}.log")
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    file_handler = logging.FileHandler(log_file)
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_formatter = logging.Formatter('%(message)s')
+    stream_handler.setFormatter(stream_formatter)
+    logger.addHandler(stream_handler)
+    return logger
 
 def set_seed(seed: int = 42) -> torch.Generator:
     """
@@ -149,11 +171,11 @@ def evaluate_predictions(
 
     Parameters
     ----------
-    all_predictions : List[Union[float, Dict[str, float]]]
+    pred : List[Union[float, Dict[str, float]]]
         A list of model predictions. For regression, this is a list of floats.
         For classification, this is a list of dictionaries containing class
         probabilities (e.g., [{'Class_0': 0.1, 'Class_1': 0.9}, ...]).
-    true_labels : List[Union[int, float]]
+    true : List[Union[int, float]]
         A list of the ground truth labels.
     task_type : str
         The type of task, either "regression" or "classification".
@@ -163,15 +185,15 @@ def evaluate_predictions(
     Dict[str, float]
         A dictionary containing the relevant evaluation metrics for the task.
     """
-    if not all_predictions:
+    if not pred:
         print("Warning: Prediction list is empty. Cannot compute metrics.")
         return {}
 
     metrics = {}
-    true_labels_np = np.array(true_labels)
+    true_labels_np = np.array(true)
 
     if task_type == "regression":
-        preds_np = np.array(all_predictions)
+        preds_np = np.array(pred)
         
         metrics["mse"] = mean_squared_error(true_labels_np, preds_np)
         pearson_corr, _ = pearsonr(true_labels_np, preds_np)
@@ -182,11 +204,11 @@ def evaluate_predictions(
         # from the list of dictionaries.
 
         # Get predicted class labels by finding the class with the highest probability
-        pred_labels_np = np.array([np.argmax(list(p.values())) for p in all_predictions])
+        pred_labels_np = np.array([np.argmax(list(p.values())) for p in pred])
         
         # Get the probability of the positive class (class 1) for AUC calculation
         # This assumes a binary classification task.
-        positive_probs_np = np.array([p.get('Class_1', 0.0) for p in all_predictions])
+        positive_probs_np = np.array([p.get('Class_1', 0.0) for p in pred])
 
         metrics["accuracy"] = accuracy_score(true_labels_np, pred_labels_np)
         metrics["f1_score"] = f1_score(true_labels_np, pred_labels_np, average='weighted', zero_division=0)
@@ -265,3 +287,164 @@ def freeze_all_but_last_n(model: nn.Module, n: Optional[int] = 10) -> nn.Module:
             param.requires_grad = True
             
     return model
+
+def compute_attention_flow(attn_tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Compute Attention Flow as proposed by Abnar & Zuidema (2020).
+
+    This method provides a more complete picture of information flow than
+    Attention Rollout by modeling propagation through both the attention
+    mechanism and the residual connections. It does this by adding an
+    identity matrix at each layer before aggregation.
+
+    Parameters
+    ----------
+    attn_tensor : torch.Tensor
+        Attention tensor of shape (num_layers, num_heads, seq_len, seq_len).
+
+    Returns
+    -------
+    torch.Tensor
+        The final attention flow matrix of shape (seq_len, seq_len).
+        Entry `[i, j]` shows the total contribution from token `j` to token `i`.
+    """
+    device = attn_tensor.device
+    num_layers, _, seq_len, _ = attn_tensor.shape
+
+    # 1. Average attention heads for each layer
+    attn_avg = attn_tensor.mean(dim=1)
+
+    # 2. Add identity matrix to account for residual connections
+    identity = torch.eye(seq_len, device=device)
+    attn_with_residuals = attn_avg + identity
+
+    # 3. Row-normalize to maintain the conservation of flow
+    attn_with_residuals = attn_with_residuals / attn_with_residuals.sum(dim=-1, keepdim=True)
+
+    # 4. Initialize flow as the identity matrix (flow at layer 0)
+    flow = torch.eye(seq_len, device=device)
+
+    # 5. Iteratively update the flow through layers
+    for layer_attn in attn_with_residuals:
+        flow = torch.matmul(layer_attn, flow)
+
+    return flow.cpu().numpy()
+
+
+def compute_attention_rollout(attn_tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Compute Attention Rollout.
+
+    This method multiplicatively aggregates attention matrices across layers.
+    It is a simpler method for analyzing information flow that, unlike
+    Attention Flow, does NOT account for residual connections. It represents
+    the flow of information purely through the attention mechanism.
+
+    Parameters
+    ----------
+    attn_tensor : torch.Tensor
+        Attention tensor of shape (num_layers, num_heads, seq_len, seq_len).
+
+    Returns
+    -------
+    torch.Tensor
+        The final attention rollout matrix of shape (seq_len, seq_len).
+        Entry `[i, j]` shows the aggregated attention from token `j` to `i`.
+    """
+    device = attn_tensor.device
+
+    # 1. Average attention heads for each layer
+    attn_avg = attn_tensor.mean(dim=1)
+
+    # 2. Initialize rollout as the identity matrix (attention at layer 0)
+    rollout = torch.eye(attn_avg.size(-1), device=device)
+
+    # 3. Iteratively multiply the raw attention matrices
+    for layer_attn in attn_avg:
+        rollout = torch.matmul(layer_attn, rollout)
+
+    return rollout.cpu().numpy()
+
+class AttributionCalculator:
+    """A self-contained class to compute attributions using Integrated Gradients."""
+    def __init__(self, model, task_type, target_class=None):
+        self.model = model
+        self.task_type = task_type
+        self.target_class = target_class
+        self.model.eval()
+
+        if self.task_type == 'classification' and self.target_class is None:
+            raise ValueError("`target_class` must be specified for classification attribution.")
+
+    def _forward_func(self, input_embeds, attention_mask):
+        # Captum requires a forward function that takes embeddings as input.
+        if attention_mask.dim() == 2:
+            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+        encoder_outputs = self.model.plm.encoder(input_embeds, attention_mask)
+        pooled_output = encoder_outputs[0][:, 0] # CLS token
+
+        if self.task_type == "regression":
+            return self.model.regressor(pooled_output)
+        else: # classification
+            logits = self.model.classifier(pooled_output)
+            return logits[:, self.target_class]
+
+    def compute_ig(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, baseline_ids: torch.Tensor, n_steps: int = 100, internal_batch_size: int = 10) -> tuple:
+        """Computes Integrated Gradients for a sequence."""
+        ig = IntegratedGradients(self._forward_func)
+
+        input_embeddings = self.model.plm.embeddings.word_embeddings(input_ids)
+        baseline_embeddings = self.model.plm.embeddings.word_embeddings(baseline_ids)
+
+        attributions, delta = ig.attribute(
+            inputs=input_embeddings,
+            baselines=baseline_embeddings,
+            additional_forward_args=(attention_mask,),
+            n_steps=n_steps,
+            return_convergence_delta=True,
+            internal_batch_size=internal_batch_size
+        )
+
+        attributions_sum = attributions.sum(dim=-1).squeeze(0).cpu().detach().numpy()
+
+        # Slice to remove special tokens and match original sequence length
+        return attributions_sum[1 : len(sequence) + 1], delta.cpu().numpy()
+
+    def compute_ig_with_smoothgrad(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, baseline_ids: torch.Tensor, n_steps: int = 100, nt_samples: int = 10, stdevs: float = 0.1, internal_batch_size: int = 10) -> tuple:
+        """Computes Integrated Gradients with the SmoothGrad technique."""
+        ig = IntegratedGradients(self._forward_func)
+        nt = NoiseTunnel(ig)
+
+        input_embeddings = self.model.plm.embeddings(input_ids)
+        baseline_embeddings = self.model.plm.embeddings(baseline_ids)
+
+        attributions, delta = nt.attribute(
+            inputs=input_embeddings,
+            baselines=baseline_embeddings,
+            nt_type='smoothgrad',
+            nt_samples=nt_samples,
+            stdevs=stdevs,
+            additional_forward_args=(attention_mask,),
+            n_steps=n_steps,
+            return_convergence_delta=True,
+            internal_batch_size=internal_batch_size
+        )
+
+        attributions_sum = attributions.sum(dim=-1).squeeze(0).cpu().detach().numpy()
+        # Slice to remove special tokens and match original sequence length
+        return attributions_sum[1 : len(sequence) + 1], delta.cpu().numpy()
+
+    def compute_gradient_x_input(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> np.ndarray:
+        """Computes Gradient x Input attributions for a sequence."""
+        gxi = InputXGradient(self._forward_func)
+        input_embeddings = self.model.plm.embeddings.word_embeddings(input_ids)
+
+        attributions = gxi.attribute(
+            inputs=input_embeddings,
+            additional_forward_args=(attention_mask,)
+        )
+
+        attributions_sum = attributions.sum(dim=-1).squeeze(0).cpu().detach().numpy()
+        
+        # Slice to remove special tokens and match original sequence length
+        return attributions_sum[1 : len(sequence) + 1]
