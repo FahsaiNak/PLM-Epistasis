@@ -389,12 +389,12 @@ class AttributionCalculator:
             logits = self.model.classifier(pooled_output)
             return logits[:, self.target_class]
 
-    def compute_ig(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, baseline_ids: torch.Tensor, n_steps: int = 100, internal_batch_size: int = 10) -> tuple:
+    def compute_ig(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, n_steps: int = 100, internal_batch_size: int = 10) -> tuple:
         """Computes Integrated Gradients for a sequence."""
         ig = IntegratedGradients(self._forward_func)
 
         input_embeddings = self.model.plm.embeddings.word_embeddings(input_ids)
-        baseline_embeddings = self.model.plm.embeddings.word_embeddings(baseline_ids)
+        baseline_embeddings = torch.zeros_like(input_embeddings)
 
         attributions, delta = ig.attribute(
             inputs=input_embeddings,
@@ -410,13 +410,13 @@ class AttributionCalculator:
         # Slice to remove special tokens and match original sequence length
         return attributions_sum[1 : len(sequence) + 1], delta.cpu().numpy()
 
-    def compute_ig_with_smoothgrad(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, baseline_ids: torch.Tensor, n_steps: int = 100, nt_samples: int = 10, stdevs: float = 0.1, internal_batch_size: int = 10) -> tuple:
+    def compute_ig_with_smoothgrad(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, n_steps: int = 100, nt_samples: int = 10, stdevs: float = 0.1, internal_batch_size: int = 10) -> tuple:
         """Computes Integrated Gradients with the SmoothGrad technique."""
         ig = IntegratedGradients(self._forward_func)
         nt = NoiseTunnel(ig)
 
         input_embeddings = self.model.plm.embeddings(input_ids)
-        baseline_embeddings = self.model.plm.embeddings(baseline_ids)
+        baseline_embeddings = torch.zeros_like(input_embeddings)
 
         attributions, delta = nt.attribute(
             inputs=input_embeddings,
