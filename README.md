@@ -1,4 +1,4 @@
-# Decoding Viral Escape from Broadly Neutralizing Antibodies using Co-Attention Attribution from Protein Language Models
+# Decoding Viral Escape using Co-Attention Attribution from Protein Language Models
 
 We fine-tune a protein language model (**ESM-2**) to predict HIV-1 Env (gp140) neutralization sensitivity to the broadly neutralizing antibody **VRC01**, and use **co-attention** and **attribution (Integrated Gradients)** analyses to interpret the molecular basis of viral escape.
 
