@@ -58,7 +58,9 @@ The full workflow consists of six major stages:
 - Save trained weights after 50 epochs or if validation loss does not improve for 10 consecutive epochs.
 
 **Run:**
-`python src/run_full_train.py --task_type classification --input_csv data/input_VRC01_IC80.csv`
+```bash
+python src/run_full_train.py --task_type classification --input_csv data/input_VRC01_IC80.csv
+```
 
 **Output:**  
 `results/full/PLM_classification_model_rep_{i}.pt` — fine-tuned model checkpoints.
@@ -75,7 +77,7 @@ The full workflow consists of six major stages:
 
 **Run:**
 ```bash
-`python src/run_predict.py --task_type classification --input_csv data/input_VRC01_IC80.csv`
+python src/run_predict.py --task_type classification --input_csv data/input_VRC01_IC80.csv
 ```
 
 **Output:**  
@@ -93,7 +95,7 @@ The full workflow consists of six major stages:
 
 **Run:**
 ```bash
-`python src/run_attentions.py --task_type classification --input_csv data/input_VRC01_IC80.csv`
+python src/run_attentions.py --task_type classification --input_csv data/input_VRC01_IC80.csv
 ```
 
 **Output:**  
