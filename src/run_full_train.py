@@ -9,12 +9,12 @@ Use this script AFTER hyperparameter tuning to train your final model.
 Typical usage:
     # Train a final classifier with specific hyperparameters
     python src/run_full_train.py \
-        --task_type $task_type --criterion $criterion \
-        --dropout $dropout --head_hidden_dim $head_hidden_dim \
-        --pooling $pooling --unfreeze_layers $unfreeze_layers \
-        --batch_size $batch_size --lr $lr \
-        --epochs $epochs \
-        --input_csv $input_csv --val_csv $val_csv
+        --task_type classification --criterion CrossEntropy \
+        --dropout 0.3 --head_hidden_dim 128 \
+        --pooling cls --unfreeze_layers 9 \
+        --batch_size 6 --lr 1.68e-5 \
+        --epochs 50 \
+        --input_csv data/input_VRC01_IC80.csv
 """
 
 # ============================

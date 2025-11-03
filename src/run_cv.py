@@ -7,8 +7,13 @@ using K-Fold Cross-Validation.
 Select the task and loss function via command-line arguments.
 
 Typical usage:
-    # Classification
-    python src/run_cv.py --task_type classification --input_csv data/input_VRC01_IC80.csv --criterion CrossEntropy --batch_size 8 --lr 2e-05 --dropout 0.1 --unfreeze_layers 11 --pooling cls --head_hidden_dim 512
+    python src/run_cv.py \
+        --task_type classification --criterion CrossEntropy \
+        --dropout 0.3 --head_hidden_dim 128 \
+        --pooling cls --unfreeze_layers 9 \
+        --batch_size 6 --lr 1.68e-5 \
+        --epochs 50 \
+        --input_csv data/input_VRC01_IC80.csv
 
 """
 
