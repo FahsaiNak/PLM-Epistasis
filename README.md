@@ -10,8 +10,8 @@ We fine-tune a protein language model (**ESM-2**) to predict HIV-1 Env (gp140) n
 |:------|:-------------|
 | **Model training** | Fine-tune ESM on labeled gp140 sequences (sensitive vs. resistant to VRC01) |
 | **Model evaluation** | Evaluate model performance and save per-sequence predictions. |
-| **Attention extraction** | Extract layer-wise co-attention matrices to identify residue–residue dependencies. |
-| **Attribution analysis** | Use Integrated Gradients (Captum) to estimate residue-level contributions to class predictions. |
+| **Attention extraction** | Compute [attention rollout](https://doi.org/10.48550/arXiv.2005.00928) matrices to identify residue–residue dependencies. |
+| **Attribution analysis** | Use [Integrated Gradients (Captum)](https://captum.ai/docs/extension/integrated_gradients) to estimate residue-level contributions to class predictions. |
 | **Interpretation** | Identify mutation hotspots and co-evolving residues contributing to bnAb escape. |
 
 ---
@@ -79,8 +79,8 @@ The full workflow consists of six major stages:
 **Goal:** Identify residue–residue dependencies captured by the model.
 
 **Method:**
-- Extract co-attention matrices from ESM’s transformer layers.
-- Average attention across heads or selected layers.
+- Extract attention matrices from ESM’s transformer layers.
+- Aggregrate attention across layers ([attention rollout](https://doi.org/10.48550/arXiv.2005.00928)), and average over heads.
 - Compare patterns between sensitive and escape groups to detect co-evolving residues.
 
 **Output:**  
