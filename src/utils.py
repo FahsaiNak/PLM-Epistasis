@@ -1,4 +1,4 @@
-"""
+src/utils.py"""
 utils.py
 ---------
 Helper utilities for reproducibility, masking, and model analysis.
@@ -304,10 +304,11 @@ def compute_attention_rollout(attentions: torch.Tensor) -> torch.Tensor:
 
 class AttributionCalculator:
     """A self-contained class to compute attributions using Integrated Gradients."""
-    def __init__(self, model, task_type, target_class=None):
+    def __init__(self, model, task_type, target_class=None, pooling_strategy="cls"):
         self.model = model
         self.task_type = task_type
         self.target_class = target_class
+        self.pooling_strategy = pooling_strategy
         self.model.eval()
 
         if self.task_type == 'classification' and self.target_class is None:
@@ -315,10 +316,15 @@ class AttributionCalculator:
 
     def _forward_func(self, input_embeds, attention_mask):
         # Captum requires a forward function that takes embeddings as input.
-        if attention_mask.dim() == 2:
-            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-        encoder_outputs = self.model.plm.encoder(input_embeds, attention_mask)
-        pooled_output = encoder_outputs[0][:, 0] # CLS token
+        outputs = self.model.plm(inputs_embeds=input_embeds, attention_mask=attention_mask)
+        if self.pooling_strategy == 'cls':
+            pooled_output = outputs.pooler_output
+        elif self.pooling_strategy == 'mean':
+            pooled_output = outputs.last_hidden_state.mean(dim=1)
+        elif self.pooling_strategy == 'max':
+            pooled_output = outputs.last_hidden_state.max(dim=1).values
+        else:
+            raise ValueError("pooling_strategy must be 'cls', 'mean' or 'max'")
 
         if self.task_type == "regression":
             return self.model.regressor(pooled_output)
@@ -326,9 +332,11 @@ class AttributionCalculator:
             logits = self.model.classifier(pooled_output)
             return logits[:, self.target_class]
 
-    def compute_ig(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, baseline_ids: torch.Tensor, n_steps: int = 100, internal_batch_size: int = 10) -> tuple:
+    def compute_ig(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, baseline_ids: Optional[torch.Tensor] = None, n_steps: int = 100, internal_batch_size: int = 10) -> tuple:
         """Computes Integrated Gradients for a sequence."""
         ig = IntegratedGradients(self._forward_func)
+        if baseline_ids is None:
+            baseline_ids = torch.zeros_like(input_ids)
 
         input_embeddings = self.model.plm.embeddings.word_embeddings(input_ids)
         baseline_embeddings = self.model.plm.embeddings.word_embeddings(baseline_ids)
@@ -347,10 +355,12 @@ class AttributionCalculator:
         # Slice to remove special tokens and match original sequence length
         return attributions_sum[1 : len(sequence) + 1], delta.cpu().numpy()
 
-    def compute_ig_with_smoothgrad(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, baseline_ids: torch.Tensor, n_steps: int = 100, nt_samples: int = 10, stdevs: float = 0.1, internal_batch_size: int = 10) -> tuple:
+    def compute_ig_with_smoothgrad(self, sequence: str, input_ids: torch.Tensor, attention_mask: torch.Tensor, baseline_ids: Optional[torch.Tensor] = None, n_steps: int = 100, nt_samples: int = 10, stdevs: float = 0.1, internal_batch_size: int = 10) -> tuple:
         """Computes Integrated Gradients with the SmoothGrad technique."""
         ig = IntegratedGradients(self._forward_func)
         nt = NoiseTunnel(ig)
+        if baseline_ids is None:
+            baseline_ids = torch.zeros_like(input_ids)
 
         input_embeddings = self.model.plm.embeddings(input_ids)
         baseline_embeddings = self.model.plm.embeddings(baseline_ids)

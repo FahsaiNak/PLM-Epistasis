@@ -8,8 +8,7 @@ Select the task and loss function via command-line arguments.
 
 Typical usage:
     # Classification
-    python src/run_cv.py --task_type classification --input_csv data/input_VRC01_IC80.csv --criterion CrossEntropy --batch_size 8 --lr 5e-06 --dropout 0.1
-    python src/run_cv.py --task_type regression --input_csv data/input_VRC01_IC80.csv --criterion MSE --batch_size 8 --lr 2e-05 --unfreeze_layers 30 --pooling max --dropout 0.2
+    python src/run_cv.py --task_type classification --input_csv data/input_VRC01_IC80.csv --criterion CrossEntropy --batch_size 8 --lr 2e-05 --dropout 0.1 --unfreeze_layers 11 --pooling cls --head_hidden_dim 512
 
 """
 
@@ -33,7 +32,7 @@ from sklearn.utils.class_weight import compute_class_weight
 
 # Local imports
 sys.path.insert(0, 'src')
-from model import PLMClassifier, PLMRegressor # Import both models
+from model import PLMClassifier, PLMRegressor
 from dataset import HIVSeqDataset
 import utils as ut
 from engine import Trainer
@@ -41,12 +40,11 @@ from engine import Trainer
 # ============================
 # Defaults
 # ============================
-MODEL_NAME = "facebook/esm2_t33_650M_UR50D" #"katielink/esm_msa1b_t12_100M_UR50S" #"facebook/esm2_t33_650M_UR50D"
-MODEL_NAME_FOR_TOKEN = "facebook/esm2_t33_650M_UR50D"
+MODEL_NAME = "facebook/esm2_t33_650M_UR50D"
 CLF_LABEL_NAME = "Label"
-REG_LABEL_NAME = "pIC80"
+REG_LABEL_NAME = "Value"
 INPUT_CSV = "data/input.csv"
-RESULTS_DIR = "results/cv"
+RESULT_DIR = "results/cv"
 LOG_DIR = "logs/cv"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ============================
@@ -69,10 +67,10 @@ def parse_args():
     # -- Hyperparameters ---
     parser.add_argument("--n_splits", type=int, default=5, help="Number of folds for cross-validation.")
     parser.add_argument("--input_csv", type=str, default=INPUT_CSV, help="Path to input CSV file.")
-    parser.add_argument("--results_dir", type=str, default=RESULTS_DIR, help="Directory to save models and results.")
+    parser.add_argument("--result_dir", type=str, default=RESULT_DIR, help="Directory to save models and results.")
     parser.add_argument("--log_dir", type=str, default=LOG_DIR, help="Directory to save log files.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
-    parser.add_argument("--epochs", type=int, default=1000, help="Max epochs per fold.")
+    parser.add_argument("--epochs", type=int, default=500, help="Max epochs per fold.")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size.")
     parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate.")
     parser.add_argument("--dropout", type=float, default=0.2, help="Dropout value for the prediction head.")
@@ -96,13 +94,16 @@ def main():
     logger.info(f"  - Using device: {DEVICE}")
 
     # --- Setup ---
-    os.makedirs(args.results_dir, exist_ok=True)
+    os.makedirs(args.result_dir, exist_ok=True)
     g = ut.set_seed(args.seed)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME_FOR_TOKEN)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
     # --- Load Data ---
     df = pd.read_csv(args.input_csv)
     sequences = df["Sequence"].astype(str).tolist()
+    max_actual_length = df["Sequence"].str.len().max()
+    max_len = min(max_actual_length+2, args.max_len)
+    logger.info(f"  - effective max_len: {max_len}")
 
     if args.task_type == "regression":
         labels = df[REG_LABEL_NAME].astype(float).tolist()
@@ -111,7 +112,7 @@ def main():
 
     # Use the class labels for stratification in both tasks
     stratify_labels = df[CLF_LABEL_NAME].astype(int).tolist()
-    full_dataset = HIVSeqDataset(sequences, labels, tokenizer, args.max_len)
+    full_dataset = HIVSeqDataset(sequences, tokenizer, max_len, labels=labels)
 
     # --- K-Fold Cross-Validation ---
     kfold = StratifiedKFold(n_splits=args.n_splits, shuffle=True, random_state=args.seed)
@@ -154,7 +155,7 @@ def main():
         # --- Save results from the fold ---
         if result["best_model_state"]:
             save_model_name = f"PLM_{args.task_type}_fold_{fold+1}.pt"
-            fold_model_path = os.path.join(args.results_dir, save_model_name)
+            fold_model_path = os.path.join(args.result_dir, save_model_name)
             torch.save(result["best_model_state"], fold_model_path)
             fold_results.append({'fold': fold + 1, **result["best_metrics"]})
             logger.info(f"Fold {fold+1} complete. Best validation loss: {result['best_metrics']['loss']:.4f}")
@@ -179,7 +180,7 @@ def main():
         
         logger.info("Individual fold results:")
         logger.info("\n" + results_df.to_string(index=False))
-        results_df.to_csv(os.path.join(args.results_dir, f"kfold_summary_{args.task_type}.csv"), index=False)
+        results_df.to_csv(os.path.join(args.result_dir, f"kfold_summary_{args.task_type}.csv"), index=False)
     else:
         logger.info("Cross-validation finished, but no results were recorded.")
 

@@ -4,7 +4,7 @@ dataset.py
 PyTorch Dataset for aligned HIV-1 protein sequences and continuous labels.
 """
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 import torch
 from torch.utils.data import Dataset
 
@@ -21,18 +21,21 @@ class HIVSeqDataset(Dataset):
     labels : list of float
         Corresponding scalar regression labels.
     tokenizer : transformers.AutoTokenizer
-        Tokenizer compatible with ProtBERT.
+        Tokenizer compatible with PLM models.
     max_len : int
         Maximum tokenized sequence length.
     """
 
-    def __init__(self, sequences: List[str], labels: List[float],
-                 tokenizer, max_len: int = 512):
-        assert len(sequences) == len(labels)
+    def __init__(self, sequences: List[str], tokenizer, max_len: int = 512, 
+                 labels: Optional[List[float]] = None):
         self.sequences = sequences
-        self.labels = labels
         self.tokenizer = tokenizer
         self.max_len = max_len
+        if labels is None:
+            self.labels = [0.0] * len(sequences)
+        else:
+            assert len(sequences) == len(labels), "Sequences and labels must have the same length."
+            self.labels = labels
 
     def __len__(self) -> int:
         return len(self.sequences)
@@ -45,7 +48,7 @@ class HIVSeqDataset(Dataset):
         tokens = self.tokenizer(
             seq_spaced,
             truncation=True,
-            padding=True,
+            padding='max_length',
             max_length=self.max_len,
             return_tensors="pt"
         )
