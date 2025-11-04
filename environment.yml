@@ -94,4 +94,3 @@ dependencies:
     - triton==3.4.0
     - typing-extensions==4.15.0
     - urllib3==2.5.0
-prefix: /projects/fana6609/software/anaconda/envs/protML
