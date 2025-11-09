@@ -95,9 +95,8 @@ def main():
     os.makedirs(args.result_dir, exist_ok=True)
     logger.info(f"Output will be saved to: {args.result_dir}")
 
-    # --- 1. Load Data ---
+    # --- Load Data ---
     logger.info("Loading data files...")
-    # Use the arguments to get data paths
     data_csv_path = os.path.join(args.input_csv)
     resno_csv_path = os.path.join(args.residue_info)
     
@@ -112,34 +111,27 @@ def main():
     resno_array = resno_df["ResLabel"].values
     logger.info(f"Loaded {len(data_df)} sequences and {len(resno_array)} residue labels.")
 
-    # --- 2. Setup Constants ---
-    AA_LIST = list("ACDEFGHIKLMNPQRSTVWYO-")
-    N_AA = len(AA_LIST)
-    aa_to_idx = {aa: i for i, aa in enumerate(AA_LIST)}
-    idx_to_aa = {v: k for k, v in aa_to_idx.items()}
-
     N_MODEL = len(args.selected_models)
     N_SEQ, L_SEQ = aligned_sequences.shape
     logger.info(f"Processing {N_MODEL} models, {N_SEQ} sequences of length {L_SEQ}.")
 
-    # --- 3. Initialize Arrays ---
+    # --- Initialize Arrays ---
     attr_scalar_array = np.zeros((N_MODEL, N_SEQ, L_SEQ))
     attn_scalar_array = np.zeros((N_MODEL, N_SEQ, L_SEQ, L_SEQ))
 
-    # --- 4. Load Model Outputs ---
+    # --- Load Model Outputs ---
     logger.info(f"Loading attributions ({args.attr_class}) and attentions...")
     for n, model_name in enumerate(tqdm(args.selected_models, desc="Loading models")):
         for i, no in enumerate(data_df['Seq_no']):
             try:
-                # Paths are now built from the args.attr_dir/attn_dir defaults
                 attr_path = os.path.join(args.attr_dir, model_name, f"{no}_attribution_ig_{args.attr_class}.npy")
                 attr = np.load(attr_path)
-                attr_scalar_array[n, i] = ut.magnitude_norm(attr) # Assumes ut.magnitude_norm
+                attr_scalar_array[n, i] = ut.magnitude_norm(attr)
 
                 attn_path = os.path.join(args.attn_dir, model_name, f"{no}_attentions.npy")
                 attn = np.load(attn_path)
                 attn_arr = attn[1:, 1:] # removal of CLS tokens
-                attn_scalar_array[n, i] = ut.min_max_norm(attn_arr) # Assumes ut.min_max_norm
+                attn_scalar_array[n, i] = ut.min_max_norm(attn_arr)
             
             except FileNotFoundError as e:
                 logger.warning(f"File not found for seq {no}, model {model_name}. Skipping. Details: {e}")
@@ -151,7 +143,7 @@ def main():
                 logger.error(f"Error processing seq {no}, model {model_name}: {e}", exc_info=True)
                 continue
 
-    # --- 5. Process Arrays ---
+    # --- Process Arrays ---
     logger.info("Averaging arrays across models...")
     mean_attr_scalar_array = np.mean(attr_scalar_array, axis=0)
     mean_attn_scalar_array = np.mean(attn_scalar_array, axis=0)
@@ -166,7 +158,7 @@ def main():
         attr_array, attn_array, weighted_by_arg, args.contribution
     )
 
-    # --- 6. Build and Save Graph ---
+    # --- Build and Save Graph ---
     logger.info("Building graph...")
     G = ut.build_graph(weighted_attn, resno_array)
 
@@ -174,7 +166,7 @@ def main():
     nx.write_gml(G, graphfile)
     logger.info(f"  Saved co-attention graph -> {graphfile}")
 
-    # --- 7. Compute and Save Centrality ---
+    # --- Compute and Save Centrality ---
     logger.info("Computing residue centrality...")
     df = ut.compute_residue_centrality(G)
 

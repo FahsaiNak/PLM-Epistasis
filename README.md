@@ -1,6 +1,6 @@
 # Decoding Viral Escape using Co-Attention Attribution from Protein Language Models
 
-We fine-tune a protein language model (**ESM-2**) to predict HIV-1 Env (gp140) neutralization sensitivity to the broadly neutralizing antibody **VRC01**, and use **co-attention** and **attribution (Integrated Gradients)** analyses to interpret the molecular basis of viral escape.
+We fine-tune a protein language model (**ESM-2**) to predict HIV-1 Env (gp160) neutralization sensitivity to the broadly neutralizing antibody **VRC01**, and use **co-attention** and **attribution (Integrated Gradients)** analyses to interpret the molecular basis of viral escape.
 
 ---
 
@@ -12,15 +12,16 @@ We fine-tune a protein language model (**ESM-2**) to predict HIV-1 Env (gp140) n
 | **Model evaluation** | Evaluate model performance and save per-sequence predictions. |
 | **Attention extraction** | Compute [attention rollout](https://doi.org/10.48550/arXiv.2005.00928) to identify residue–residue relationships. |
 | **Attribution analysis** | Use [Integrated Gradients (Captum)](https://captum.ai/docs/extension/integrated_gradients) to estimate residue-level contributions to class predictions. |
+| **Graph analysis** | Build attribution co-attention networks and compute residue centrality metrics. |
 | **Interpretation** | Identify mutation hotspots and co-evolving residues contributing to bnAb escape. |
 
 ---
 
-## 🧬 Workflow Summary
+## Workflow Summary
 
 This project decodes the molecular basis of **HIV-1 escape from the broadly neutralizing antibody VRC01** using **ESM-based protein language models** and **co-attention attribution** analysis.
 
-The full workflow consists of six major stages:
+The full workflow consists of seven major stages:
 
 ---
 
@@ -124,7 +125,36 @@ python src/run_attributions.py --task_type classification --target_class 1 --inp
 
 ---
 
-### **6. Interpretation and Visualization**
+### **6. Graph Construction and Centrality Analysis**
+
+**Goal:** Integrate attribution and attention signals into a residue–residue interaction network to quantify influence and sensitivity.
+
+**Method:**
+- Load pre-computed `attribution` and `attention` arrays across model replicates.
+- Compute `co-attribution/co-attention` matrices that reflect contextual coupling weighted by attribution relevance.
+- Average across replicates and construct a unified `attribution-weighted co-attention graph`.
+- Compute `centrality metrics` (e.g., degree, betweenness, eigenvector) to identify key residues driving model predictions.
+
+**Run:**
+```bash
+python src/run_graph.py \
+    --selected_models rep_5 rep_6 rep_7 rep_9 rep_10 \
+    --attr_class class_1 \
+    --weighted_by Source \
+    --contribution Negative
+```
+
+**Output:**
+- `results/graphs/Graph_[...].gml` — Weighted co-attention graph.
+- `results/graphs/Connectivity_[...].csv` — Residue centrality metrics.
+
+**Interpretation:**
+- **Weighted by Source:** highlights residues *driving influence* (sources of perturbation; e.g., N279K, N276 glycan loss).
+- **Weighted by Target:** highlights residues *receiving influence* (contextually sensitive; e.g., A281T).
+
+---
+
+### **7. Interpretation and Visualization**
 **Goal:** Link model explanations to known escape mechanisms.
 
 **Analyses:**
@@ -147,6 +177,15 @@ python src/run_attributions.py --task_type classification --target_class 1 --inp
 | **3. Prediction** | Model checkpoints | Inference | `train_rep_i.csv` |
 | **4. Co-Attention Extraction** | Trained ESM-2 model | Attention rollout | `attention_maps/` |
 | **5. Attribution Analysis** | Model + Captum | Integrated Gradients | `attribution_maps/` |
-| **6. Interpretation** | Outputs | Structural mapping | Hotspots, residue ranks |
+| **6. Graph Analysis** | `attention_maps/`, `attribution_maps/` | Graph building, Centrality | `Graph_[...].gml`, `Connectivity_[...].csv` |
+| **7. Interpretation** | Outputs from all stages | Structural mapping | Hotspots, residue ranks, figures |
+
+---
+
+## Citation
+
+If you use this framework for your research, please cite the associated manuscript (in preparation):
+
+Nakarin, F. et al. "Interpretable Protein Language Model Reveals Mechanistic Networks Underlying VRC01 Resistance in HIV-1 Envelope Glycoprotein." (2025, in prep.)
 
 ---
