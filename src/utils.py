@@ -476,17 +476,28 @@ def compute_weighted_attention(attr_array, attn_array, weighted_by, contribution
         mask = np.ones_like(attr_array, dtype=bool)
 
     # --- Weight attribution ---
-    if weighted_by == "Source": # Source of Influence (j)
-        # shape → (N_SEQ, L_SEQ, 1, N_AA, 1)
-        weight_attr = attr_array[:, :, None, :, None]
-        mask_attr = mask[:, :, None, :, None]
-    elif weighted_by == "Target": # Target of Influence (i)
-        # shape → (N_SEQ, 1, L_SEQ, 1, N_AA)
-        weight_attr = attr_array[:, None, :, None, :]
-        mask_attr = mask[:, None, :, None, :]
+    
+    # if weighted_by == "Source": # Source of Influence (j)
+    #     # shape → (N_SEQ, L_SEQ, 1, N_AA, 1)
+    #     weight_attr = attr_array[:, :, None, :, None]
+    #     mask_attr = mask[:, :, None, :, None]
+    # elif weighted_by == "Target": # Target of Influence (i)
+    #     # shape → (N_SEQ, 1, L_SEQ, 1, N_AA)
+    #     weight_attr = attr_array[:, None, :, None, :]
+    #     mask_attr = mask[:, None, :, None, :]
+    
+    # Weight attribution
+    if weighted_by == "Source":
+        # Weights by j-axis (Source of Influence)
+        weight_attr = attr_array[:, None, :, None]
+        mask_attr = mask[:, None, :, None]
+    elif weighted_by == "Target":
+        # Weights by i-axis (Target of Influence)
+        weight_attr = attr_array[:, :, None, None]
+        mask_attr = mask[:, :, None, None]
     else:
-        weight_attr = np.ones((N_SEQ, 1, 1, 1, 1))
-        mask_attr = np.ones((N_SEQ, 1, 1, 1, 1))
+        weight_attr = np.ones((N_SEQ, 1, 1, 1))
+        mask_attr = np.ones((N_SEQ, 1, 1, 1))
 
     # --- Weighted sum across sequences ---
     weighted_attn = np.abs(np.sum(attn_array * weight_attr * mask_attr, axis=0))
