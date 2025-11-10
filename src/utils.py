@@ -486,21 +486,22 @@ def compute_weighted_attention(attr_array, attn_array, weighted_by, contribution
     #     weight_attr = attr_array[:, None, :, None, :]
     #     mask_attr = mask[:, None, :, None, :]
     
-    # Weight attribution
-    if weighted_by == "Source":
-        # Weights by j-axis (Source of Influence)
-        weight_attr = attr_array[:, None, :, None]
-        mask_attr = mask[:, None, :, None]
-    elif weighted_by == "Target":
-        # Weights by i-axis (Target of Influence)
-        weight_attr = attr_array[:, :, None, None]
-        mask_attr = mask[:, :, None, None]
+    # --- Weight attribution (5D VERSION) ---
+    if weighted_by == "Source": # Source of Influence (j)
+        # Reshape to (N_SEQ, 1, L_SEQ, 1, N_AA) to align with j and aa_j
+        weight_attr = attr_array[:, None, :, None, :]
+        mask_attr = mask[:, None, :, None, :]
+    elif weighted_by == "Target": # Target of Influence (i)
+        # Reshape to (N_SEQ, L_SEQ, 1, N_AA, 1) to align with i and aa_i
+        weight_attr = attr_array[:, :, None, :, None]
+        mask_attr = mask[:, :, None, :, None]
     else:
-        weight_attr = np.ones((N_SEQ, 1, 1, 1))
-        mask_attr = np.ones((N_SEQ, 1, 1, 1))
+        weight_attr = np.ones((N_SEQ, 1, 1, 1, 1))
+        mask_attr = np.ones_like(weight_attr, dtype=bool)
 
     # --- Weighted sum across sequences ---
-    weighted_attn = np.abs(np.sum(attn_array * weight_attr * mask_attr, axis=0))
+    weighted_sum = np.sum(attn_array * weight_attr * mask_attr, axis=0)
+    weighted_attn = np.abs(weighted_sum)
 
     # --- Normalize by number of valid positions ---
     count = np.sum(mask, axis=0)[:, :, None]

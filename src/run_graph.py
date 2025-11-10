@@ -9,11 +9,20 @@ model replicates, averages them, and computes a single weighted graph
 representing co-attention between residues, weighted by attribution scores.
 
 Typical usage:
+    # Build graph for all sequences
     python src/run_graph.py \
         --selected_models rep_5 rep_6 rep_7 rep_9 rep_10 \
         --attr_class class_1 \
         --weighted_by Source \
         --contribution Negative
+
+    # Build graph for only resistant (class 0) sequences
+    python src/run_graph.py \
+        --selected_models rep_5 rep_6 rep_7 rep_9 rep_10 \
+        --attr_class class_1 \
+        --weighted_by Source \
+        --contribution Negative \
+        --label_class 0
 """
 
 # ============================
@@ -61,6 +70,9 @@ def parse_args():
                         help="List of model replicate names (e.g., rep_1 rep_2).")
     parser.add_argument("--attr_class", type=str, required=True,
                         help="Attribution class to load (e.g., class_0, class_1).")
+    # --- MODIFICATION: Set default to None for cleaner checking ---
+    parser.add_argument("--label_class", type=int, default=None,
+                        help="Label to compute (e.g. 0 for class 0 (resistant), 1 for class 1 (sensitive). Default=None for all.")
     parser.add_argument("--input_csv", type=str, default=INPUT_CSV,
                         help="Path to the main input CSV file with sequence info.")
     parser.add_argument("--residue_info", type=str, default=RESIDUE_INFO,
@@ -82,7 +94,8 @@ def main():
     weighted_by_arg = args.weighted_by if args.weighted_by != "None" else None
 
     # --- Logging Setup ---
-    log_name = f"graph_{args.attr_class}_{args.weighted_by}_{args.contribution}"
+    label_name = args.label_class if args.label_class is not None else "all"
+    log_name = f"graph_{args.attr_class}_label_{label_name}_{args.weighted_by}_{args.contribution}"
     logger = ut.setup_logging(args.log_dir, log_name)
 
     logger.info("=================================================")
@@ -106,14 +119,14 @@ def main():
     except FileNotFoundError as e:
         logger.error(f"Error: Data file not found. Make sure you are running from the project root. {e}")
         sys.exit(1)
-        
+
     aligned_sequences = np.array([list(seq) for seq in data_df['Sequence']])
     resno_array = resno_df["ResLabel"].values
     logger.info(f"Loaded {len(data_df)} sequences and {len(resno_array)} residue labels.")
 
     N_MODEL = len(args.selected_models)
     N_SEQ, L_SEQ = aligned_sequences.shape
-    logger.info(f"Processing {N_MODEL} models, {N_SEQ} sequences of length {L_SEQ}.")
+    logger.info(f"Processing {N_MODEL} models, {N_SEQ} total sequences of length {L_SEQ}.")
 
     # --- Initialize Arrays ---
     attr_scalar_array = np.zeros((N_MODEL, N_SEQ, L_SEQ))
@@ -135,22 +148,38 @@ def main():
             
             except FileNotFoundError as e:
                 logger.warning(f"File not found for seq {no}, model {model_name}. Skipping. Details: {e}")
-                # Ensure array remains 0s for this entry
                 attr_scalar_array[n, i] = 0 
                 attn_scalar_array[n, i] = 0
                 continue
             except Exception as e:
                 logger.error(f"Error processing seq {no}, model {model_name}: {e}", exc_info=True)
                 continue
+    
+    # --- Filter by Label Class ---
+    if args.label_class is not None:
+        logger.info(f"Filtering for label_class == {args.label_class}")
+        label_array = data_df["Label"].values
+        mask_class = label_array == args.label_class
+    else:
+        logger.info("Using all sequences (label_class == None)")
+        mask_class = np.repeat(True, N_SEQ)
+    
+    num_filtered_seqs = np.sum(mask_class)
+    if num_filtered_seqs == 0:
+        logger.error(f"No sequences found for label_class == {args.label_class}. Exiting.")
+        sys.exit(1)
+    
+    logger.info(f"Building graph using {num_filtered_seqs} sequences.")
 
     # --- Process Arrays ---
     logger.info("Averaging arrays across models...")
-    mean_attr_scalar_array = np.mean(attr_scalar_array, axis=0)
-    mean_attn_scalar_array = np.mean(attn_scalar_array, axis=0)
+    mean_attr_scalar_array = np.mean(attr_scalar_array, axis=0)[mask_class]
+    mean_attn_scalar_array = np.mean(attn_scalar_array, axis=0)[mask_class]
+    filtered_aligned_sequences = aligned_sequences[mask_class]
 
     logger.info("Building type-aware arrays...")
     attr_array, attn_array, aa_idx_array = ut.build_typeaware_arrays(
-        aligned_sequences, mean_attr_scalar_array, mean_attn_scalar_array
+        filtered_aligned_sequences, mean_attr_scalar_array, mean_attn_scalar_array
     )
 
     logger.info(f"Computing weighted attention (by={args.weighted_by}, contribution={args.contribution})...")
@@ -162,7 +191,8 @@ def main():
     logger.info("Building graph...")
     G = ut.build_graph(weighted_attn, resno_array)
 
-    graphfile = os.path.join(args.result_dir, f"Graph_{args.attr_class}_{args.weighted_by}_{args.contribution}.gml")
+    # Add label_class to output filenames
+    graphfile = os.path.join(args.result_dir, f"Graph_{args.attr_class}_label_{label_name}_{args.weighted_by}_{args.contribution}.gml")
     nx.write_gml(G, graphfile)
     logger.info(f"  Saved co-attention graph -> {graphfile}")
 
@@ -170,7 +200,7 @@ def main():
     logger.info("Computing residue centrality...")
     df = ut.compute_residue_centrality(G)
 
-    outfile = os.path.join(args.result_dir, f"Connectivity_{args.attr_class}_{args.weighted_by}_{args.contribution}.csv")
+    outfile = os.path.join(args.result_dir, f"Connectivity_{args.attr_class}_label_{label_name}_{args.weighted_by}_{args.contribution}.csv")
     df.to_csv(outfile, index=False)
     logger.info(f"  Saved residue connectivity metrics -> {outfile}")
     
