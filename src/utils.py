@@ -463,7 +463,7 @@ def build_typeaware_arrays(sequences, attr_scalar, attn_scalar):
 
     return attr_array, attn_array, aa_idx_array
 
-def compute_weighted_attention(attr_array, attn_array, weighted_by, contribution):
+def _compute_weighted_attention(attr_array, attn_array, weighted_by, contribution):
     """Compute weighted attention across all sequences."""
     N_SEQ, L_SEQ, N_AA = attr_array.shape
 
@@ -511,6 +511,48 @@ def compute_weighted_attention(attr_array, attn_array, weighted_by, contribution
         np.maximum(count, 1e-8),
         out=np.zeros_like(weighted_attn),
         where=(count > 0)
+    )
+    return weighted_attn
+
+def compute_weighted_attention(attr_array, attn_array, weighted_by, contribution):
+    """Compute weighted attention across all sequences."""
+    N_SEQ, L_SEQ, N_AA = attr_array.shape
+
+    # --- Contribution mask ---
+    if contribution == "Positive":
+        mask = attr_array > 0
+    elif contribution == "Negative":
+        mask = attr_array < 0
+    else:
+        mask = np.ones_like(attr_array, dtype=bool)
+    
+    count_2d = np.sum(mask, axis=0)
+    # --- Weight attribution  ---
+    if weighted_by == "Source": # Source of Influence (j)
+        # Reshape to (N_SEQ, 1, L_SEQ, 1, N_AA) to align with j and aa_j
+        weight_attr = attr_array[:, None, :, None, :]
+        mask_attr = mask[:, None, :, None, :]
+        count_broadcastable = count_2d[None, :, None, :]
+    elif weighted_by == "Target": # Target of Influence (i)
+        # Reshape to (N_SEQ, L_SEQ, 1, N_AA, 1) to align with i and aa_i
+        weight_attr = attr_array[:, :, None, :, None]
+        mask_attr = mask[:, :, None, :, None]
+        count_broadcastable = count_2d[:, None, :, None]
+    else:
+        weight_attr = np.ones((N_SEQ, 1, 1, 1, 1))
+        mask_attr = mask[:, :, None, :, None]
+        count_broadcastable = count_2d[:, None, :, None]
+
+    # --- Weighted sum across sequences ---
+    weighted_sum = np.sum(attn_array * weight_attr * mask_attr, axis=0)
+    weighted_attn = np.abs(weighted_sum)
+    
+    # --- Normalize by number of valid positions ---
+    weighted_attn = np.divide(
+        weighted_attn,
+        np.maximum(count_broadcastable, 1e-8),
+        out=np.zeros_like(weighted_attn),
+        where=(count_broadcastable > 0)
     )
     return weighted_attn
 
