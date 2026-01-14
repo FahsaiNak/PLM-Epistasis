@@ -136,7 +136,7 @@ python src/run_attributions.py --task_type classification --target_class 1 --inp
 - Integrate attribution scores to quantify functional signal propagation.
 - Derive Goodness of Communication scores (net, positive, and negative) to identify resistance hubs and context-sensitive sites.
 
-Detailed implementations are provided in seq_communication.ipynb.
+Detailed implementations are provided in [seq_communication.ipynb](https://github.com/FahsaiNak/PLM-Epistasis/blob/main/jupyter_notebook/seq_communication.ipynb).
 
 ---
 
