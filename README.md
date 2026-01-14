@@ -12,8 +12,8 @@ We fine-tune a protein language model (**ESM-2**) to predict HIV-1 Env (gp160) n
 | **Model evaluation** | Evaluate model performance and save per-sequence predictions. |
 | **Attention extraction** | Compute [attention rollout](https://doi.org/10.48550/arXiv.2005.00928) to identify residue–residue relationships. |
 | **Attribution analysis** | Use [Integrated Gradients (Captum)](https://captum.ai/docs/extension/integrated_gradients) to estimate residue-level contributions to class predictions. |
-| **Graph analysis** | Build attribution co-attention networks and compute residue centrality metrics. |
-| **Interpretation** | Identify mutation hotspots and co-evolving residues contributing to bnAb escape. |
+| **Residue communication** | Construct directional communication networks integrating attention and attribution. |
+| **Interpretation** | Identify epitope features, escape pathways, and communication hubs |
 
 ---
 
@@ -86,7 +86,7 @@ python src/run_predict.py --task_type classification --input_csv data/input_VRC0
 
 ---
 
-### **4. Co-Attention Extraction**
+### **4. Attention Extraction**
 **Goal:** Identify residue–residue dependencies captured by the model.
 
 **Method:**
@@ -125,67 +125,25 @@ python src/run_attributions.py --task_type classification --target_class 1 --inp
 
 ---
 
-### **6. Graph Construction and Centrality Analysis**
+### **6. Residue Communication and Goodness of Communication**
 
-**Goal:** Integrate attribution and attention signals into a residue–residue interaction network to quantify influence and sensitivity.
+**Goal:** Resolve how residue-level effects propagate through sequence context.
 
 **Method:**
-- Load pre-computed `attribution` and `attention` arrays across model replicates.
-- Compute `co-attribution/co-attention` matrices that reflect contextual coupling weighted by attribution relevance.
-- Average across replicates and construct a unified `attribution-weighted co-attention graph`.
-- Compute `centrality metrics` (e.g., degree, betweenness, eigenvector) to identify key residues driving model predictions.
+- Construct two directional communication matrices by weighting residue–residue attention with [CLS]-based residue importance.
+1. Influential (Outgoing): how effectively a residue broadcasts signals
+2. Vulnerability (Incoming): how strongly a residue receives contextual signals
+- Integrate attribution scores to quantify functional signal propagation.
+- Derive Goodness of Communication scores (net, positive, and negative) to identify resistance hubs and context-sensitive sites.
 
-**Run:**
-```bash
-python src/run_graph.py \
-    --selected_models rep_5 rep_6 rep_7 rep_9 rep_10 \
-    --attr_class class_1 \
-    --weighted_by Source \
-    --contribution Negative
-```
-
-**Output:**
-- `results/graphs/Graph_[...].gml` — Weighted co-attention graph.
-- `results/graphs/Connectivity_[...].csv` — Residue centrality metrics.
-
-**Interpretation:**
-- **Weighted by Source:** highlights residues *driving influence* (sources of perturbation; e.g., N279K, N276 glycan loss).
-- **Weighted by Target:** highlights residues *receiving influence* (contextually sensitive; e.g., A281T).
-
----
-
-### **7. Interpretation and Visualization**
-**Goal:** Link model explanations to known escape mechanisms.
-
-**Analyses:**
-- Map attention and attribution hotspots onto the gp140 structure (e.g., with `py3Dmol`).
-- Identify residues overlapping with known **VRC01 contact sites** (CD4 binding loop, loop D, V5).
-- Examine shared vs. strain-specific escape pathways.
-
-**Output:**
-- Structural heatmaps and visualization figures.
-- Ranked lists of residues driving VRC01 escape.
-
----
-
-### **Summary Table**
-
-| Stage | Input | Method | Output |
-|:------|:-------|:--------|:--------|
-| **1. Data Preparation** | gp140 sequences + IC80 | Curation, labeling | `input_VRC01_IC80.csv` |
-| **2. Model Fine-Tuning** | Labeled sequences | ESM-2 fine-tuning | `PLM_model_rep_i.pt` |
-| **3. Prediction** | Model checkpoints | Inference | `train_rep_i.csv` |
-| **4. Co-Attention Extraction** | Trained ESM-2 model | Attention rollout | `attention_maps/` |
-| **5. Attribution Analysis** | Model + Captum | Integrated Gradients | `attribution_maps/` |
-| **6. Graph Analysis** | `attention_maps/`, `attribution_maps/` | Graph building, Centrality | `Graph_[...].gml`, `Connectivity_[...].csv` |
-| **7. Interpretation** | Outputs from all stages | Structural mapping | Hotspots, residue ranks, figures |
+Detailed implementations are provided in seq_communication.ipynb.
 
 ---
 
 ## Citation
 
-If you use this framework for your research, please cite the associated manuscript (in preparation):
+If you use this framework, please cite:
 
-Nakarin, F. et al. "Interpretable Protein Language Model Reveals Mechanistic Networks Underlying VRC01 Resistance in HIV-1 Envelope Glycoprotein." (2025, in prep.)
+Nakarin, F. et al. "An Interpretable Protein Language Model Framework Reveals Residue-Level Determinants of Viral Escape from Broadly Neutralizing Antibodies." (2025, in prep.)
 
 ---
