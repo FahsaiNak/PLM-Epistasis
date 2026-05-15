@@ -65,6 +65,9 @@ def parse_args():
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--pooling", type=str, default="cls", choices=["cls", "mean", "max"])
     parser.add_argument("--max_len", type=int, default=MAX_LEN)
+    parser.add_argument("--load_weights", type=str, default="all", choices=["all", "head_only", "random"],
+                        help="Specify whether to load 'all' weights or 'head_only' (keeps base PLM weights untouched), or 'random' all the weights.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     # --- Log Configuration ---
     parser.add_argument("--input_csv", type=str, default=INPUT_CSV)
     parser.add_argument("--result_dir", type=str, default=RESULT_DIR)
@@ -74,6 +77,7 @@ def parse_args():
 def main():
     """Main execution routine for computing and saving attribution matrices."""
     args = parse_args()
+    g = ut.set_seed(args.seed)
     if args.method == "ig" or args.method == "smoothgrad":
         if args.task_type == "classification":
             log_name = f"attr_{args.method}_{args.target_class}"
@@ -102,9 +106,40 @@ def main():
         model = PLMClassifier(model_name=MODEL_NAME, num_classes=args.num_classes,
                               head_hidden_dim=args.head_hidden_dim, dropout=args.dropout,
                               pooling_strategy=args.pooling)
+
+    full_checkpoint = torch.load(args.model_path, map_location=DEVICE)
+    if args.load_weights == "head_only":
+        logger.info("Loading saved weights for the MLP head ONLY...")
+        base_model_prefix = "plm"
+        
+        head_only_weights = {
+            k: v for k, v in full_checkpoint.items() 
+            if not k.startswith(base_model_prefix)
+        }
+
+        if not head_only_weights:
+            logger.warning(f"No head weights found! Check if the base model prefix '{base_model_prefix}' is correct.")
+        
+        model.load_state_dict(head_only_weights, strict=False)
+        logger.info("Head weights loaded successfully. Base PLM weights remain at original pre-trained values.")
     
-    model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
-    model.to(DEVICE)
+    elif args.load_weights == "random":
+        logger.info("Ignoring checkpoint. Randomizing ALL weights (base PLM + head)...")
+        model.plm.init_weights()
+        head = model.classifier if args.task_type == "classification" else model.regressor
+        for layer in head:
+            if hasattr(layer, 'reset_parameters'):
+                layer.reset_parameters()
+        logger.info("All model weights have been completely randomized.")
+    
+    else:
+        logger.info("Loading ALL saved weights (Base PLM + Head)...")
+        model.load_state_dict(full_checkpoint, strict=True)
+        logger.info("All weights loaded successfully.")
+    
+    # model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
+    # model.to(DEVICE)
+    model = model.to(DEVICE)
 
     # Load Data and Instantiate Dataset
     df = pd.read_csv(args.input_csv)

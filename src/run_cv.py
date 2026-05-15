@@ -40,7 +40,7 @@ sys.path.insert(0, 'src')
 from model import PLMClassifier, PLMRegressor
 from dataset import HIVSeqDataset
 import utils as ut
-from engine import Trainer
+from engine import Trainer, Predictor
 
 # ============================
 # Defaults
@@ -118,15 +118,21 @@ def main():
     # Use the class labels for stratification in both tasks
     stratify_labels = df[CLF_LABEL_NAME].astype(int).tolist()
     full_dataset = HIVSeqDataset(sequences, tokenizer, max_len, labels=labels)
+    full_loader = DataLoader(full_dataset, batch_size=args.batch_size, shuffle=False)
 
     # --- K-Fold Cross-Validation ---
     kfold = StratifiedKFold(n_splits=args.n_splits, shuffle=True, random_state=args.seed)
     fold_results = []
     stratify_labels_np = np.array(stratify_labels)
 
+    all_fold_predictions = []
     for fold, (train_ids, val_ids) in enumerate(kfold.split(full_dataset, stratify_labels_np)):
         logger.info("-" * 50)
         logger.info(f"STARTING FOLD {fold + 1}/{args.n_splits}")
+        
+        split_labels = np.array(["Unknown"] * len(full_dataset), dtype=object)
+        split_labels[train_ids] = "Train"
+        split_labels[val_ids] = "Test"
 
         train_sampler = SubsetRandomSampler(train_ids)
         val_sampler = SubsetRandomSampler(val_ids)
@@ -165,6 +171,30 @@ def main():
             fold_results.append({'fold': fold + 1, **result["best_metrics"]})
             logger.info(f"Fold {fold+1} complete. Best validation loss: {result['best_metrics']['loss']:.4f}")
 
+            logger.info(f"Running predictions on the full dataset for Fold {fold+1}...")
+            model.load_state_dict(result["best_model_state"])
+            predictor = Predictor(model=model, device=DEVICE)
+            
+            all_predictions = []
+            for batch in full_loader:
+                input_ids = batch["input_ids"].to(DEVICE)
+                attention_mask = batch["attention_mask"].to(DEVICE)
+                batch_preds = predictor.predict(input_ids, attention_mask)
+                
+                if isinstance(batch_preds, torch.Tensor):
+                    batch_preds = batch_preds.detach().cpu().numpy()
+                
+                all_predictions.extend(batch_preds)
+            
+            fold_pred_df = pd.DataFrame({
+                            "Seq_no": df["Seq_no"],
+                            "fold": fold + 1,
+                            "split": split_labels,
+                            "actual_label": labels,
+                            "prediction": all_predictions
+                            })
+            all_fold_predictions.append(fold_pred_df)
+
     # --- Aggregate and Log Final Results ---
     if fold_results:
         results_df = pd.DataFrame(fold_results)
@@ -186,6 +216,12 @@ def main():
         logger.info("Individual fold results:")
         logger.info("\n" + results_df.to_string(index=False))
         results_df.to_csv(os.path.join(args.result_dir, f"kfold_summary_{args.task_type}.csv"), index=False)
+
+        if all_fold_predictions:
+            final_predictions_df = pd.concat(all_fold_predictions, ignore_index=True)
+            predictions_csv_path = os.path.join(args.result_dir, f"predictions_summary_{args.task_type}.csv")
+            final_predictions_df.to_csv(predictions_csv_path, index=False)
+            logger.info(f"Saved full fold predictions to {predictions_csv_path}")
     else:
         logger.info("Cross-validation finished, but no results were recorded.")
 
