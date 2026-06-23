@@ -1,4 +1,4 @@
-# Decoding Viral Escape using Attention Maps from Protein Language Models
+# Decoding HIV-1 Antibody Escape with Interpretable Protein Language Models
 
 We fine-tune a protein language model (**ESM-2**) to predict HIV-1 Env (gp160) neutralization sensitivity to the broadly neutralizing antibody **VRC01**, and use **co-attention** and **attribution (Integrated Gradients)** analyses to interpret the molecular basis of viral escape.
 
