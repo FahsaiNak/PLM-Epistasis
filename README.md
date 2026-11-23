@@ -3,7 +3,7 @@
 We fine-tune a protein language model (**ESM-2**) to predict HIV-1 Env (gp160) neutralization sensitivity to the broadly neutralizing antibody **VRC01**, and use **co-attention** and **attribution (Integrated Gradients)** analyses to interpret the molecular basis of viral escape.
 
 <p align="center">
-  <img src="assets/fitness-workflow.png" alt="Overview of the PLM-Epistasis framework: ESM-2 fine-tuning on HIV-1 Env sequences, Integrated Gradients residue attribution, attention-derived residue communication, and the resulting antibody-specific viral fitness score." width="100%">
+  <img src="assets/fitness-workflow-v2.png" alt="Overview of the PLM-Epistasis framework: ESM-2 fine-tuning on HIV-1 Env sequences, Integrated Gradients residue attribution, attention-derived residue communication, and the resulting antibody-specific viral fitness score." width="100%">
 </p>
 
 <p align="center">
